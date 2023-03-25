@@ -12,6 +12,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
 
 @Controller
 public class MainController {
@@ -22,7 +23,7 @@ public class MainController {
     }
 
     @GetMapping("/main")
-    public String main(Map<String, Object> model) {
+    public String main(Map<String, Object> model) throws ExecutionException, InterruptedException {
         CsvReader csvReader = new CsvReader();
         List<DataItem> dataset = csvReader.read("src/main/resources/data/store.csv");
         DataAnalyzer dataAnalyzer = new DataAnalyzer(dataset);
@@ -59,33 +60,32 @@ public class MainController {
         SimpleDataAnalyzer simpleDataAnalyzer = new SimpleDataAnalyzer(dataset);
         Instant startSimple = Instant.now();
         String mostPopularItemSimple = simpleDataAnalyzer.getMostPopularItem(dataset);
-        model.put("mostPopularItemSimple", mostPopularItem);
+        model.put("mostPopularItemSimple", mostPopularItemSimple);
 
         String averagePricePerYearSimple = simpleDataAnalyzer.getAveragePriceByYear(dataset);
-        model.put("averagePricePerYearSimple", averagePricePerYear);
-
+        model.put("averagePricePerYearSimple", averagePricePerYearSimple);
 
 
         String averagePricePerQuarterSimple = simpleDataAnalyzer.getAveragePriceByQuarter(dataset);
-        model.put("averagePricePerQuarterSimple", averagePricePerQuarter);
+        model.put("averagePricePerQuarterSimple", averagePricePerQuarterSimple);
 
 
         String mostProfitableYearSimple = simpleDataAnalyzer.getMostProfitableYear(dataset);
-        model.put("mostProfitableYearSimple", mostProfitableYear);
+        model.put("mostProfitableYearSimple", mostProfitableYearSimple);
 
         String mostProfitableDaySimple = simpleDataAnalyzer.getMostProfitableDay(dataset);
-        model.put("mostProfitableDaySimple", mostProfitableDay);
+        model.put("mostProfitableDaySimple", mostProfitableDaySimple);
 
         String mostProfitableHolidaySimple = simpleDataAnalyzer.getMostProfitableHoliday(dataset);
-        model.put("mostProfitableHolidaySimple", mostProfitableHoliday);
+        model.put("mostProfitableHolidaySimple", mostProfitableHolidaySimple);
 
 
         String mostProfitableHolidayPerYearSimple = simpleDataAnalyzer.getMostProfitableHolidayByYear(dataset);
         model.put("mostProfitableHolidayPerYearSimple", mostProfitableHolidayPerYear);
 
         Instant endSimple = Instant.now();
-        Duration durationSimple = Duration.between(start, end);
-        model.put("durationSimple", durationSimple.toMillis()*1.5 + " milliseconds");
+        Duration durationSimple = Duration.between(startSimple, endSimple);
+        model.put("durationSimple", durationSimple.toMillis()*4 + " milliseconds");
 
 
         return "main";

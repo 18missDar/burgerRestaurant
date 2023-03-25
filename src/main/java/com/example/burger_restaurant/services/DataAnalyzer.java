@@ -1,5 +1,9 @@
 package com.example.burger_restaurant.services;
 
+import com.example.burger_restaurant.domain.ItemQuantity;
+import com.example.burger_restaurant.domain.Quarter;
+import com.example.burger_restaurant.domain.YearData;
+import com.example.burger_restaurant.domain.YearProfit;
 import org.apache.commons.lang3.StringUtils;
 
 import java.math.BigDecimal;
@@ -7,8 +11,7 @@ import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 public class DataAnalyzer {
@@ -20,63 +23,86 @@ public class DataAnalyzer {
         this.data = data;
     }
 
-    public String getMostPopularItem() {
-        Map<String, Long> itemCounts = data.parallelStream()
-                .collect(Collectors.groupingByConcurrent(DataItem::getItem, Collectors.counting()));
+    public String getMostPopularItem() throws InterruptedException, ExecutionException {
+        // Create a list of Callables to count the total quantity for each item
+        List<Callable<ItemQuantity>> tasks = new ArrayList<>();
+        Set<String> itemSet = new HashSet<>();
+        for (DataItem item : data) {
+            if (!itemSet.contains(item.getItem())) {
+                itemSet.add(item.getItem());
+                tasks.add(() -> {
+                    int totalQuantity = 0;
+                    for (DataItem currentItem : data) {
+                        if (currentItem.getItem().equals(item.getItem())) {
+                            totalQuantity += currentItem.getQuantity();
+                        }
+                    }
+                    return new ItemQuantity(item.getItem(), totalQuantity);
+                });
+            }
+        }
 
-        // Get the most popular item
-        return itemCounts.entrySet().parallelStream()
-                .max(Map.Entry.comparingByValue())
-                .map(Map.Entry::getKey)
-                .orElse("No items found");
+        // Use an ExecutorService to submit the tasks and get a list of Futures
+        ExecutorService executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+        List<Future<ItemQuantity>> futures = executorService.invokeAll(tasks);
+
+        // Find the item with the highest total quantity
+        int maxQuantity = 0;
+        String mostPopularItem = null;
+        for (Future<ItemQuantity> future : futures) {
+            ItemQuantity itemQuantity = future.get();
+            int quantity = itemQuantity.getQuantity();
+            if (quantity > maxQuantity) {
+                maxQuantity = quantity;
+                mostPopularItem = itemQuantity.getItem();
+            }
+        }
+
+        // Shutdown the ExecutorService and return the result as a string
+        executorService.shutdown();
+        return "The most popular item is " + mostPopularItem + " with a total quantity of " + maxQuantity;
     }
 
     //average price for each year
     public String getAveragePricePerYear(List<DataItem> data) {
-        Map<Integer, Double> result = data.parallelStream()
-                .collect(Collectors.groupingByConcurrent(DataItem::getYear,
-                        Collectors.averagingDouble(DataItem::getPrice)));
+        // Create a map to store the total price and quantity for each year
+        Map<Integer, YearData> yearTotals = new HashMap<>();
 
-        StringBuilder sb = new StringBuilder();
-        for (Map.Entry<Integer, Double> entry : result.entrySet()) {
-            sb.append("Year: " + entry.getKey() + ", Average Price: " + entry.getValue() + "\n");
+        // Create a thread pool to perform the calculations
+        ExecutorService executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+
+        for (DataItem item : data) {
+            // Submit a task to the thread pool to update the totals for the year of the current item
+            executor.submit(() -> {
+                int year = item.getYear();
+                double price = item.getPrice();
+                int quantity = item.getQuantity();
+                YearData yearData = yearTotals.get(year);
+                if (yearData == null) {
+                    yearData = new YearData();
+                    yearTotals.put(year, yearData);
+                }
+                yearData.addToTotal(price * quantity);
+                yearData.addToQuantity(quantity);
+            });
         }
+
+        // Wait for all the tasks to complete
+        executor.shutdown();
+        while (!executor.isTerminated()) {}
+
+        // Calculate the average price for each year
+        StringBuilder sb = new StringBuilder();
+        for (int year : yearTotals.keySet()) {
+            YearData yearData = yearTotals.get(year);
+            double averagePrice = yearData.getTotal() / yearData.getQuantity();
+            sb.append("Year ").append(year).append(": ").append(averagePrice).append("\n");
+        }
+
         return sb.toString();
     }
 
     //average price for each quarter
-    private static class Quarter {
-        private final int year;
-        private final int quarter;
-
-        public Quarter(int year, int quarter) {
-            this.year = year;
-            this.quarter = quarter;
-        }
-
-        @Override
-        public int hashCode() {
-            return year * 10 + quarter;
-        }
-
-        @Override
-        public boolean equals(Object obj) {
-            if (obj == this) {
-                return true;
-            }
-            if (!(obj instanceof Quarter)) {
-                return false;
-            }
-            Quarter other = (Quarter) obj;
-            return this.year == other.year && this.quarter == other.quarter;
-        }
-
-        @Override
-        public String toString() {
-            return String.format("%d Q%d", year, quarter);
-        }
-    }
-
     public static String getAveragePricePerQuarter(List<DataItem> dataItems) {
         Map<Quarter, List<DataItem>> itemsByQuarter = dataItems.parallelStream()
                 .collect(Collectors.groupingByConcurrent(
@@ -102,18 +128,38 @@ public class DataAnalyzer {
     }
 
     //most profitable year
-    public String getMostProfitableYear(List<DataItem> data) {
-        Map<Integer, BigDecimal> result = data.parallelStream()
-                .collect(Collectors.groupingByConcurrent(DataItem::getYear,
-                        Collectors.mapping(item -> BigDecimal.valueOf(item.getPrice()).multiply(BigDecimal.valueOf(item.getQuantity())),
-                                Collectors.reducing(BigDecimal.ZERO, BigDecimal::add))));
+    public String getMostProfitableYear(List<DataItem> data) throws ExecutionException, InterruptedException {
+        // Create a list of FutureTasks to calculate the total profit for each year
+        List<FutureTask<YearProfit>> tasks = new ArrayList<>();
+        for (int year = 2000; year <= 2023; year++) {
+            final int currentYear = year;
+            FutureTask<YearProfit> task = new FutureTask<>(() -> {
+                double totalProfit = 0.0;
+                for (DataItem item : data) {
+                    if (item.getYear() == currentYear) {
+                        totalProfit += item.getPrice() * item.getQuantity();
+                    }
+                }
+                return new YearProfit(currentYear, totalProfit);
+            });
+            tasks.add(task);
+            Executors.newSingleThreadExecutor().submit(task);
+        }
 
-        Map.Entry<Integer, BigDecimal> maxEntry = result.entrySet().parallelStream().max(Map.Entry.comparingByValue())
-                .orElse(null);
+        // Wait for all the tasks to complete and find the year with the highest profit
+        double maxProfit = Double.NEGATIVE_INFINITY;
+        int mostProfitableYear = -1;
+        for (FutureTask<YearProfit> task : tasks) {
+            YearProfit yearProfit = task.get();
+            double profit = yearProfit.getProfit();
+            if (profit > maxProfit) {
+                maxProfit = profit;
+                mostProfitableYear = yearProfit.getYear();
+            }
+        }
 
-        return maxEntry != null
-                ? "Most profitable year: " + maxEntry.getKey() + ", Total Profit: " + maxEntry.getValue()
-                : "No data found";
+        // Return the result as a string
+        return "The most profitable year is " + mostProfitableYear + " with a total profit of " + maxProfit;
     }
 
     //most profitable  day
